@@ -84,6 +84,7 @@ import {
 } from './tool-result-utils';
 import { fetchOllamaModelInfo } from '../config/ollama-api';
 import { createWindowsBashOperations } from './windows-bash-operations';
+import { buildSudoScript } from './sudo-script';
 import { createLimaSandboxCodingTools, VIRTUAL_WORKSPACE_PATH } from './lima-sandbox-operations';
 import { createCompactionExtensionFactory } from './compaction-extension';
 
@@ -1051,7 +1052,9 @@ ${hints.join('\n')}
     useLimaSandbox: boolean
   ): ToolDefinition[] {
     // Lima commands, including sudo, stay in the guest tool backend.
-    if (useLimaSandbox || !this.requestSudoPassword) return tools;
+    // Windows sudo has no -S/-v and prompts through UAC itself, so it is not
+    // wrapped there.
+    if (useLimaSandbox || !this.requestSudoPassword || process.platform === 'win32') return tools;
 
     const requestSudoPassword = this.requestSudoPassword;
 
@@ -1085,18 +1088,15 @@ ${hints.join('\n')}
               };
             }
 
-            // Add -S flag to sudo invocations that don't already have it
-            const rewrittenCommand = command.replace(/\bsudo\b(?!\s+-S)/g, 'sudo -S');
+            // The password goes in on stdin, consumed only by a leading
+            // `sudo -S -v`; stdin is then replaced with /dev/null so nothing
+            // in the model-written command can read the password back.
+            const script = buildSudoScript(command);
 
-            // Pass password via stdin pipe so it never appears in process args
-            // or environment variables. Uses async spawn with stdio: 'pipe'.
-            log(
-              '[CoworkAgentRunner] Executing sudo command with password injection (via stdin pipe)'
-            );
+            log('[CoworkAgentRunner] Executing sudo command (password consumed by sudo -v only)');
             try {
-              const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/sh';
-              const shellArgs =
-                process.platform === 'win32' ? ['/c', rewrittenCommand] : ['-c', rewrittenCommand];
+              const shell = '/bin/sh';
+              const shellArgs = ['-c', script];
               const timeoutMs = (params.timeout ?? 120) * 1000;
               const output = await new Promise<string>((resolve, reject) => {
                 const child = spawn(shell, shellArgs, {
