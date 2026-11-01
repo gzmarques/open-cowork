@@ -18,8 +18,53 @@ import type {
   PairingRequest,
   PairedUser,
   GatewayEvent,
+  GatewayAuthConfig,
 } from './types';
 import { MessageRouter } from './message-router';
+
+/**
+ * Decide whether a WebSocket client may authenticate.
+ *
+ * WebSocket clients are not covered by the allowlist/pairing checks that guard
+ * channel messages, so the only way in is a shared secret: token mode with a
+ * non-empty configured token, compared in constant time. Every other mode
+ * (allowlist, pairing, open) refuses WebSocket clients outright.
+ */
+export function checkWSAuth(
+  auth: Pick<GatewayAuthConfig, 'mode' | 'token'>,
+  presented: unknown
+): { success: true } | { success: false; error: string } {
+  if (auth.mode !== 'token') {
+    return {
+      success: false,
+      error: 'WebSocket access requires token authentication mode',
+    };
+  }
+
+  const expected = typeof auth.token === 'string' ? auth.token : '';
+  if (!expected) {
+    return { success: false, error: 'No gateway token configured' };
+  }
+  if (typeof presented !== 'string' || !presented) {
+    return { success: false, error: 'Invalid token' };
+  }
+
+  // Hash both sides so timingSafeEqual gets equal-length buffers and the
+  // comparison does not leak the token length.
+  const a = crypto.createHash('sha256').update(presented).digest();
+  const b = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(a, b)
+    ? { success: true }
+    : { success: false, error: 'Invalid token' };
+}
+
+/**
+ * Accept only handshakes without an Origin header (native clients such as
+ * scripts or CLIs). Browsers always send Origin, so this keeps web pages out.
+ */
+export function isAllowedWSHandshake(origin: string | undefined): boolean {
+  return origin === undefined || origin === '';
+}
 
 // WebSocket client connection
 interface WSClient {
@@ -87,6 +132,12 @@ export class RemoteGateway extends EventEmitter {
       this.wss = new WebSocketServer({
         server: this.httpServer,
         path: '/ws',
+        // Browsers always send an Origin header on WebSocket handshakes and
+        // allow any web page to connect to 127.0.0.1. No browser client is
+        // supported, so refuse every handshake that carries an Origin to stop
+        // web pages (and DNS-rebinding attacks) from driving the agent.
+        verifyClient: (info: { origin?: string; req: IncomingMessage }) =>
+          isAllowedWSHandshake(info.origin),
       });
 
       this.wss.on('connection', this.handleWSConnection.bind(this));
@@ -758,33 +809,21 @@ export class RemoteGateway extends EventEmitter {
       return;
     }
 
-    const { token } = message.payload as { token?: string };
+    const { token } = (message.payload ?? {}) as { token?: unknown };
+    const result = checkWSAuth(this.config.auth, token);
 
-    if (this.config.auth.mode === 'token') {
-      if (token === this.config.auth.token) {
-        client.authenticated = true;
-        this.sendWSMessage(client.ws, {
-          type: 'auth_result',
-          payload: { success: true },
-          requestId: message.requestId,
-        });
-        log('[Gateway] WS client authenticated:', client.id);
-      } else {
-        this.sendWSMessage(client.ws, {
-          type: 'auth_result',
-          payload: { success: false, error: 'Invalid token' },
-          requestId: message.requestId,
-        });
-      }
-    } else {
-      // Other auth modes don't require token for WS
+    if (result.success) {
       client.authenticated = true;
-      this.sendWSMessage(client.ws, {
-        type: 'auth_result',
-        payload: { success: true },
-        requestId: message.requestId,
-      });
+      log('[Gateway] WS client authenticated:', client.id);
+    } else {
+      logWarn('[Gateway] WS client authentication rejected:', client.id);
     }
+
+    this.sendWSMessage(client.ws, {
+      type: 'auth_result',
+      payload: result,
+      requestId: message.requestId,
+    });
   }
 
   private async handleWSClientMessage(client: WSClient, message: WSMessage): Promise<void> {
