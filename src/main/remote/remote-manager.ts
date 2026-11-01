@@ -29,6 +29,35 @@ import type {
 import type { Message, ContentBlock, ServerEvent, Session } from '../../renderer/types/index';
 import { getFeishuWebhookConfigError } from '../../shared/feishu-webhook-config';
 
+/**
+ * Tools that the "auto-approve safe tools" option may run without asking the
+ * remote user. Only tools that read local state and cannot send data anywhere
+ * belong here. Excluded on purpose:
+ *  - WebFetch / WebSearch: the URL or query can carry file contents out
+ *    (prompt-injection exfiltration).
+ *  - Chrome navigate/new_page/click/fill/press_key/hover/select/close: act in
+ *    the user's real, signed-in browser and can also navigate to an attacker URL.
+ *  - Chrome evaluate_script: arbitrary JavaScript in the user's browser.
+ *  - Task: starts a subagent with its own tool use.
+ */
+export const REMOTE_AUTO_APPROVABLE_TOOLS: ReadonlySet<string> = new Set([
+  'Read',
+  'Glob',
+  'Grep',
+  'LS',
+  'mcp__Chrome__take_screenshot',
+  'mcp__Chrome__take_snapshot',
+  'mcp__Chrome__list_pages',
+  'mcp__Chrome__wait_for',
+  'mcp__Chrome__get_network_request',
+  'mcp__Chrome__list_network_requests',
+  'mcp__Chrome__list_console_messages',
+]);
+
+export function isRemoteAutoApprovableTool(toolName: string): boolean {
+  return REMOTE_AUTO_APPROVABLE_TOOLS.has(toolName);
+}
+
 // Agent executor interface - exported for use in main process
 export interface AgentExecutor {
   startSession(title: string, prompt: string, cwd?: string): Promise<Session>;
@@ -706,36 +735,7 @@ export class RemoteManager extends EventEmitter {
     // Check if auto-approve is enabled for safe tools
     const config = remoteConfigStore.getAll();
     if (config.gateway.autoApproveSafeTools) {
-      const safeTools = [
-        // Read-only tools
-        'Read',
-        'Glob',
-        'Grep',
-        'LS',
-        'WebFetch',
-        'WebSearch',
-        // MCP Chrome tools (for browsing)
-        'mcp__Chrome__navigate_page',
-        'mcp__Chrome__take_screenshot',
-        'mcp__Chrome__take_snapshot',
-        'mcp__Chrome__click',
-        'mcp__Chrome__fill',
-        'mcp__Chrome__hover',
-        'mcp__Chrome__list_pages',
-        'mcp__Chrome__select_page',
-        'mcp__Chrome__new_page',
-        'mcp__Chrome__close_page',
-        'mcp__Chrome__wait_for',
-        'mcp__Chrome__press_key',
-        'mcp__Chrome__evaluate_script',
-        'mcp__Chrome__get_network_request',
-        'mcp__Chrome__list_network_requests',
-        'mcp__Chrome__list_console_messages',
-        // Task tools
-        'Task',
-      ];
-
-      if (safeTools.includes(toolName)) {
+      if (isRemoteAutoApprovableTool(toolName)) {
         log('[RemoteManager] Auto-approving safe tool:', toolName);
         // Send notification to user
         await this.doSendToChannel(channelInfo, `🔧 自动执行: **${toolName}**`);

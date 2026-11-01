@@ -937,7 +937,7 @@
     "defaultWorkingDirectoryHint": "AI 执行命令时的默认目录，也可以在消息中用 `[cwd:路径]` 临时指定",
     "gatewayPort": "服务端口",
     "autoApproveSafeTools": "自动批准安全工具",
-    "autoApproveSafeToolsDesc": "自动允许执行读取文件、浏览器操作等安全工具",
+    "autoApproveSafeToolsDesc": "自动允许只读工具（读取文件、搜索、浏览器截图）。网络请求、浏览器操作和命令仍需确认。",
     "saveConfig": "保存配置",
     "authorizedUsersTitle": "已授权用户（{{count}}）",
     "revokeAccess": "移除授权",

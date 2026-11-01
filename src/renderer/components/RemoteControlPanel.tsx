@@ -53,7 +53,7 @@ export function RemoteControlPanel({ isActive }: { isActive: boolean }) {
   const [feishuDmPolicy, setFeishuDmPolicy] = useState('pairing');
   const [gatewayPort, setGatewayPort] = useState(18789);
   const [defaultWorkingDirectory, setDefaultWorkingDirectory] = useState('');
-  const [autoApproveSafeTools, setAutoApproveSafeTools] = useState(true);
+  const [autoApproveSafeTools, setAutoApproveSafeTools] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [useLongConnection, setUseLongConnection] = useState(true);
   const [tunnelEnabled, setTunnelEnabled] = useState(false);
@@ -98,7 +98,7 @@ export function RemoteControlPanel({ isActive }: { isActive: boolean }) {
       if (configResult) {
         setGatewayPort(configResult.gateway?.port || 18789);
         setDefaultWorkingDirectory(configResult.gateway?.defaultWorkingDirectory || '');
-        setAutoApproveSafeTools(configResult.gateway?.autoApproveSafeTools !== false);
+        setAutoApproveSafeTools(configResult.gateway?.autoApproveSafeTools === true);
         setTunnelEnabled(configResult.gateway?.tunnel?.enabled || false);
         setNgrokAuthToken(configResult.gateway?.tunnel?.ngrok?.authToken || '');
         if (configResult.channels?.feishu) {

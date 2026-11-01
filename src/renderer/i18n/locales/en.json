@@ -937,7 +937,7 @@
     "defaultWorkingDirectoryHint": "This is the default directory for AI commands. You can also override it in a message with `[cwd:path]`.",
     "gatewayPort": "Service port",
     "autoApproveSafeTools": "Auto-approve safe tools",
-    "autoApproveSafeToolsDesc": "Automatically allow safe tools such as file reads and browser operations.",
+    "autoApproveSafeToolsDesc": "Automatically allow read-only tools such as file reads, searches and browser screenshots. Web requests, browser actions and shell commands always ask.",
     "saveConfig": "Save configuration",
     "authorizedUsersTitle": "Authorized users ({{count}})",
     "revokeAccess": "Revoke access",
