@@ -247,6 +247,36 @@ function truncateLogText(value: string, maxLength = MAX_LOG_STRING_LENGTH): stri
   return `${value.slice(0, maxLength)}… [truncated ${value.length - maxLength} chars]`;
 }
 
+const REDACTED = '[REDACTED]';
+
+/**
+ * Field names whose values are credentials. Matches apiKey, api_key,
+ * encryptKey, authToken, NOTION_TOKEN, clientSecret, password, Authorization…
+ * but not counters such as maxTokens or inputTokens (plural "tokens").
+ */
+const SENSITIVE_LOG_KEY_PATTERN =
+  /^(?:.*api[-_]?key|encrypt[-_]?key|private[-_]?key|secret[-_]?key|access[-_]?key|authorization|proxy-authorization|cookie|set-cookie|password|passwd|.*secret|.*token)$/i;
+
+export function isSensitiveLogKey(key: string): boolean {
+  return SENSITIVE_LOG_KEY_PATTERN.test(key);
+}
+
+/** Well-known credential formats that can show up inside free-form text. */
+const SECRET_TEXT_PATTERNS: RegExp[] = [
+  /\bsk-(?:ant-|proj-|or-)?[A-Za-z0-9_-]{16,}/g, // Anthropic, OpenAI, OpenRouter keys
+  /\bAIza[0-9A-Za-z_-]{30,}/g, // Google API keys
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, // Slack tokens
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, // Authorization headers
+];
+
+export function redactSecretsInText(text: string): string {
+  let result = text;
+  for (const pattern of SECRET_TEXT_PATTERNS) {
+    result = result.replace(pattern, REDACTED);
+  }
+  return result;
+}
+
 function normalizeLogValue(value: unknown, seen = new WeakSet<object>(), depth = 0): unknown {
   if (value instanceof Error) {
     if (seen.has(value)) {
@@ -259,8 +289,10 @@ function normalizeLogValue(value: unknown, seen = new WeakSet<object>(), depth =
     );
     return {
       name: err.name,
-      message: truncateLogText(err.message || ''),
-      stack: err.stack ? truncateLogText(err.stack, MAX_LOG_STRING_LENGTH * 2) : undefined,
+      message: truncateLogText(redactSecretsInText(err.message || '')),
+      stack: err.stack
+        ? truncateLogText(redactSecretsInText(err.stack), MAX_LOG_STRING_LENGTH * 2)
+        : undefined,
       cause: err.cause !== undefined ? normalizeLogValue(err.cause, seen, depth + 1) : undefined,
       meta:
         extraEntries.length > 0
@@ -270,7 +302,7 @@ function normalizeLogValue(value: unknown, seen = new WeakSet<object>(), depth =
   }
 
   if (typeof value === 'string') {
-    return truncateLogText(value);
+    return truncateLogText(redactSecretsInText(value));
   }
 
   if (
@@ -326,7 +358,12 @@ function normalizeLogValue(value: unknown, seen = new WeakSet<object>(), depth =
     const entries = Object.entries(value as Record<string, unknown>);
     const limitedEntries = entries
       .slice(0, MAX_LOG_OBJECT_KEYS)
-      .map(([key, item]) => [key, normalizeLogValue(item, seen, depth + 1)]);
+      .map(([key, item]) => [
+        key,
+        isSensitiveLogKey(key) && item !== undefined && item !== null && item !== ''
+          ? REDACTED
+          : normalizeLogValue(item, seen, depth + 1),
+      ]);
 
     if (entries.length > MAX_LOG_OBJECT_KEYS) {
       limitedEntries.push([
@@ -341,7 +378,7 @@ function normalizeLogValue(value: unknown, seen = new WeakSet<object>(), depth =
   return String(value);
 }
 
-function serializeLogArg(arg: unknown): string {
+export function serializeLogArg(arg: unknown): string {
   const normalized = normalizeLogValue(arg);
   if (typeof normalized === 'string') {
     return normalized;
