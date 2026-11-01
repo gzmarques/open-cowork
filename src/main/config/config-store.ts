@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import Store, { type Options as StoreOptions } from 'electron-store';
 import { log, logWarn } from '../utils/logger';
+import { resolveStoreKeys } from '../utils/store-key';
 import {
   createEncryptedStoreWithKeyRotation,
   getLegacyDerivedKeyHexes,
@@ -578,20 +579,30 @@ function defaultProtocolForProvider(provider: ProviderType): CustomProtocolType 
 }
 
 export class ConfigStore {
-  private store: Store<AppConfig>;
+  private openedStore: Store<AppConfig> | null = null;
 
-  constructor() {
+  /**
+   * The file is opened on first use, not at import time: its encryption key is
+   * protected by safeStorage, which is only available once the app is ready.
+   */
+  private get store(): Store<AppConfig> {
+    if (!this.openedStore) {
+      this.openedStore = ConfigStore.openStore();
+      this.ensureNormalized();
+    }
+    return this.openedStore;
+  }
+
+  private static openStore(): Store<AppConfig> {
     const storeOptions: StoreOptions<AppConfig> & { projectName?: string } = {
       name: 'config',
       projectName: 'open-cowork',
       defaults: defaultConfig,
     };
 
-    // Cast to satisfy the Record<string, unknown> constraint of the encrypted store utility;
-    // AppConfig is a structurally compatible object type at runtime.
-    type AppConfigRecord = AppConfig & Record<string, unknown>;
-    this.store = createEncryptedStoreWithKeyRotation<AppConfigRecord>({
-      stableKey: 'open-cowork-config-stable-v1',
+    const keys = resolveStoreKeys({
+      storeName: 'config',
+      fixedKey: 'open-cowork-config-stable-v1',
       legacyKeys: [
         'open-cowork-config-v1',
         ...getLegacyDerivedKeyHexes({
@@ -601,12 +612,21 @@ export class ConfigStore {
           salt: 'open-cowork-config-salt',
         }),
       ],
+      log,
+      warn: logWarn,
+    });
+
+    // Cast to satisfy the Record<string, unknown> constraint of the encrypted store utility;
+    // AppConfig is a structurally compatible object type at runtime.
+    type AppConfigRecord = AppConfig & Record<string, unknown>;
+    return createEncryptedStoreWithKeyRotation<AppConfigRecord>({
+      stableKey: keys.stableKey,
+      legacyKeys: keys.legacyKeys,
       storeOptions: storeOptions as StoreOptions<AppConfigRecord> & { projectName?: string },
       logPrefix: '[ConfigStore]',
       log,
       warn: logWarn,
     }) as unknown as Store<AppConfig>;
-    this.ensureNormalized();
   }
 
   private ensureNormalized(): void {

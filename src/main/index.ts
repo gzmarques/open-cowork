@@ -122,10 +122,15 @@ if (dotenvResult.error) {
   log('[dotenv] Loaded successfully');
 }
 
-// Apply saved config (this overrides .env if config exists)
-if (configStore.isConfigured()) {
-  log('[Config] Applying saved configuration...');
-  configStore.applyToEnv();
+// Saved config is applied in app.whenReady() (see applySavedConfigToEnv):
+// its encryption key is protected by safeStorage, which is not available
+// before the app is ready on Windows and Linux.
+function applySavedConfigToEnv(): void {
+  // Apply saved config (this overrides .env if config exists)
+  if (configStore.isConfigured()) {
+    log('[Config] Applying saved configuration...');
+    configStore.applyToEnv();
+  }
 }
 
 // Disable hardware acceleration for better compatibility
@@ -868,6 +873,20 @@ function sendToRenderer(event: ServerEvent) {
 app
   .whenReady()
   .then(async () => {
+    // First thing once ready: open the encrypted config and apply it to env,
+    // before any session, window or headless run reads provider settings.
+    try {
+      applySavedConfigToEnv();
+    } catch (error) {
+      logError('[Config] Failed to open the saved configuration:', error);
+      dialog.showErrorBox(
+        'Open Cowork',
+        `Could not open the saved configuration.\n\n${error instanceof Error ? error.message : String(error)}`
+      );
+      app.exit(1);
+      return;
+    }
+
     // Smoke test mode: verify the app can start, then exit cleanly
     if (process.argv.includes('--smoke-test')) {
       log('[SmokeTest] App launched successfully in smoke test mode');

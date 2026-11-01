@@ -9,6 +9,7 @@ import {
   createEncryptedStoreWithKeyRotation,
   getLegacyDerivedKeyHexes,
 } from '../utils/store-encryption';
+import { resolveStoreKeys } from '../utils/store-key';
 import type {
   RemoteConfig,
   GatewayConfig,
@@ -21,18 +22,36 @@ import type {
 } from './types';
 import { DEFAULT_REMOTE_CONFIG } from './types';
 
-class RemoteConfigStore {
-  private store: Store<RemoteConfig & { pairedUsers: PairedUser[] }>;
+type RemoteStore = Store<RemoteConfig & { pairedUsers: PairedUser[] }>;
 
-  constructor() {
+class RemoteConfigStore {
+  private openedStore: RemoteStore | null = null;
+
+  /**
+   * Opened on first use rather than at import time: the encryption key is
+   * protected by safeStorage, which is only available once the app is ready.
+   */
+  private get store(): RemoteStore {
+    if (!this.openedStore) {
+      this.openedStore = RemoteConfigStore.openStore();
+      // Migrate: change pairing mode to allowlist (allow everyone by default)
+      this.migrateAuthMode();
+      // Migrate: sync gateway auth mode to match Feishu DM policy for existing installs
+      this.migrateFeishuDmPolicySync();
+    }
+    return this.openedStore;
+  }
+
+  private static openStore(): RemoteStore {
     // Cast to satisfy the Record<string, unknown> constraint of the encrypted store utility;
     // RemoteConfig & { pairedUsers: PairedUser[] } is structurally compatible at runtime.
     type RemoteConfigRecord = RemoteConfig & { pairedUsers: PairedUser[] } & Record<
         string,
         unknown
       >;
-    this.store = createEncryptedStoreWithKeyRotation<RemoteConfigRecord>({
-      stableKey: 'open-cowork-remote-stable-v1',
+    const keys = resolveStoreKeys({
+      storeName: 'remote-config',
+      fixedKey: 'open-cowork-remote-stable-v1',
       legacyKeys: [
         'open-cowork-remote-v1',
         ...getLegacyDerivedKeyHexes({
@@ -42,6 +61,12 @@ class RemoteConfigStore {
           salt: 'open-cowork-remote-salt',
         }),
       ],
+      log,
+      warn: logWarn,
+    });
+    return createEncryptedStoreWithKeyRotation<RemoteConfigRecord>({
+      stableKey: keys.stableKey,
+      legacyKeys: keys.legacyKeys,
       storeOptions: {
         name: 'remote-config',
         projectName: 'open-cowork',
@@ -53,13 +78,7 @@ class RemoteConfigStore {
       logPrefix: '[RemoteConfigStore]',
       log,
       warn: logWarn,
-    }) as unknown as Store<RemoteConfig & { pairedUsers: PairedUser[] }>;
-
-    // Migrate: change pairing mode to allowlist (allow everyone by default)
-    this.migrateAuthMode();
-
-    // Migrate: sync gateway auth mode to match Feishu DM policy for existing installs
-    this.migrateFeishuDmPolicySync();
+    }) as unknown as RemoteStore;
   }
 
   /**

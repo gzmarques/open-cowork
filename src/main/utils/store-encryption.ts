@@ -174,34 +174,44 @@ export function createEncryptedStoreWithKeyRotation<T extends Record<string, unk
         const snapshot = legacyStore.store as T;
         const storePath = legacyStore.path;
 
-        // Write the new store with the stable key FIRST so data is safe on disk
-        // before we touch the old file. If the process crashes after this point,
-        // the new store already holds all data and will be used on next startup.
-        const stableStore = new Store<T>({
+        // Opening the stable store directly on storePath would fail (the file
+        // is still encrypted with the legacy key), so:
+        //  1. keep a copy of the old file,
+        //  2. write the snapshot, encrypted with the stable key, to a sibling
+        //     file and atomically rename it over the original,
+        //  3. reopen with the stable key.
+        // A crash at any point leaves either the old file or the fully written
+        // new one in place, plus the backup copy.
+        const backupPath = buildBackupPath(storePath);
+        fs.copyFileSync(storePath, backupPath);
+
+        const tempName = `${resolveStoreName(options.storeOptions)}.rekey-${process.pid}`;
+        const tempStore = new Store<T>({
+          ...(options.storeOptions as StoreOptions<T>),
+          name: tempName,
+          encryptionKey: stableKey,
+        });
+        try {
+          tempStore.store = snapshot;
+          fs.renameSync(tempStore.path, storePath);
+        } catch (writeError) {
+          try {
+            fs.rmSync(tempStore.path, { force: true });
+          } catch {
+            // Best effort cleanup of the temporary file.
+          }
+          throw writeError;
+        }
+
+        options.log?.(`${options.logPrefix} Migrated encrypted store to a new key`, {
+          storePath,
+          backupPath,
+        });
+
+        return new Store<T>({
           ...(options.storeOptions as StoreOptions<T>),
           encryptionKey: stableKey,
         });
-        stableStore.store = snapshot;
-
-        // Now that the new store is safely written, back up the old file.
-        // electron-store may have already replaced it when we opened stableStore
-        // above, so we only move it if it still exists.
-        if (fs.existsSync(storePath)) {
-          const backupPath = buildBackupPath(storePath);
-          try {
-            fs.renameSync(storePath, backupPath);
-          } catch {
-            // renameSync can fail across devices; fall back to copy + delete.
-            fs.copyFileSync(storePath, backupPath);
-            fs.unlinkSync(storePath);
-          }
-          options.log?.(`${options.logPrefix} Migrating encrypted store to a stable key`, {
-            storePath,
-            backupPath,
-          });
-        }
-
-        return stableStore;
       } catch (legacyError) {
         if (!isLikelyKeyMismatch(legacyError)) {
           throw legacyError;

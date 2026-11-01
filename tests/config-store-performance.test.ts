@@ -50,6 +50,9 @@ describe('ConfigStore lightweight reads', () => {
 
   it('reads direct scalar keys without invoking full normalization pipeline', () => {
     const store = new ConfigStore();
+    // The file is opened (and normalized once) on first access rather than in
+    // the constructor; open it before measuring the steady-state read path.
+    store.get('provider');
     const normalizeSpy = vi.spyOn(
       store as unknown as { normalizeConfig: () => unknown },
       'normalizeConfig'
