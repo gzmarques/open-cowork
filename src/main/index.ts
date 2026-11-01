@@ -572,7 +572,7 @@ function createWindow() {
       return { action: 'deny' };
     }
     if (isExternalUrl(url)) {
-      void shell.openExternal(url);
+      void openExternalIfSafe(url);
       return { action: 'deny' };
     }
     return { action: 'allow' };
@@ -587,7 +587,7 @@ function createWindow() {
     }
     if (isExternalUrl(url)) {
       event.preventDefault();
-      void shell.openExternal(url);
+      void openExternalIfSafe(url);
     }
   });
 
@@ -1455,7 +1455,12 @@ app
         });
     }
 
-    startNavServer(() => mainWindow);
+    // The navigation server is a development aid with no authentication: any
+    // local program or web page could drive the UI and read session ids.
+    // Only start it for unpackaged runs or when explicitly opted in.
+    if (!app.isPackaged || process.env.OPEN_COWORK_NAV_SERVER === '1') {
+      startNavServer(() => mainWindow);
+    }
 
     const scheduledTaskStore = createScheduledTaskStore(db);
     scheduledTaskManager = new ScheduledTaskManager({
@@ -1745,7 +1750,12 @@ ipcMain.handle('system.getTheme', () => {
   }
 });
 
-ipcMain.handle('shell.openExternal', async (_event, url: string) => {
+/**
+ * Hand a URL to the OS only for web and mail links. Other schemes (file:,
+ * smb:, ms-msdt:, custom app protocols…) can launch programs or reach network
+ * shares, so they are refused wherever the renderer can ask to open a link.
+ */
+async function openExternalIfSafe(url: string): Promise<boolean> {
   if (!url) {
     return false;
   }
@@ -1761,8 +1771,11 @@ ipcMain.handle('shell.openExternal', async (_event, url: string) => {
     return false;
   }
 
-  return shell.openExternal(url);
-});
+  await shell.openExternal(url);
+  return true;
+}
+
+ipcMain.handle('shell.openExternal', async (_event, url: string) => openExternalIfSafe(url));
 
 async function revealFileInFolder(filePath: string, cwd?: string): Promise<boolean> {
   if (!filePath) {
